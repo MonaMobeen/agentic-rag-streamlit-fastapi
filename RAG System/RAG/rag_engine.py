@@ -1,7 +1,6 @@
 import io
 import os
 import uuid
-
 from functools import lru_cache
 from typing import Iterable
 from dotenv import load_dotenv
@@ -149,7 +148,6 @@ class RAGService:
     self.retriever = None
     self.documents = []
     self.chunks = []
-
     def build_index(self, uploaded_files: Iterable) -> dict:
         self.documents = load_uploaded_dcouments(uploaded_files)
 
