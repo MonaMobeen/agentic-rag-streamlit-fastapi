@@ -100,54 +100,54 @@ class RAGService:
         top_k: int = 4,
     ) -> None:
 
-    if not os.getenv("GROQ_API_KEY"):
-        raise ValueError("GROQ_API_KEY is not set")
+        if not os.getenv("GROQ_API_KEY"):
+            raise ValueError("GROQ_API_KEY is not set")
 
-    self.chunk_size = chunk_size
-    self.chunk_overlap = chunk_overlap
-    self.top_k = top_k
-    
-    self.embedding_model = get_embedding_model()
-    self.llm = ChatGroq(
-        model=GROQ_MODEL,
-        temperature=0,
-        max_retries=2,
-    )
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        self.top_k = top_k
 
-    self.prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """
-                You are a document question-answering assistant.
-                Answer the user's question using ONLY the context below.
+        self.embedding_model = get_embedding_model()
+        self.llm = ChatGroq(
+            model=GROQ_MODEL,
+            temperature=0,
+            max_retries=2,
+        )
 
-                Rules:
-                1. Do not use outside knowledge.
-                2. If the answer is not available in the context, say exactly:
-                "I couldn't find that information in the uploaded documents."
-                3. Keep the answe clear and concise.
-                4. When useful, mention the source filename and page number.
+        self.prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """
+                    You are a document question-answering assistant.
+                    Answer the user's question using ONLY the context below.
 
-                Context:
-                {context}
-                """
-            ),
-            (
-                "human",
-                "Question: {question}"
-            ),
-        ]
-    )
+                    Rules:
+                    1. Do not use outside knowledge.
+                    2. If the answer is not available in the context, say exactly:
+                    "I couldn't find that information in the uploaded documents."
+                    3. Keep the answer clear and concise.
+                    4. When useful, mention the source filename and page number.
 
-    self.answer_chain = (
-        self.prompt | self.llm | StrOutputParser()
-    )
+                    Context:
+                    {context}
+                    """
+                ),
+                (
+                    "human",
+                    "Question: {question}"
+                ),
+            ]
+        )
 
-    self.vector_store = None
-    self.retriever = None
-    self.documents = []
-    self.chunks = []
+        self.answer_chain = (
+            self.prompt | self.llm | StrOutputParser()
+        )
+
+        self.vector_store = None
+        self.retriever = None
+        self.documents = []
+        self.chunks = []
     def build_index(self, uploaded_files: Iterable) -> dict:
         self.documents = load_uploaded_dcouments(uploaded_files)
 
