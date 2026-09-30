@@ -298,12 +298,22 @@ if __name__ == "__main__":
     info = service.build_index([FakeUpload(pdf_path)])
     print("Index ready:", info)
 
-    for q in ["What is the multi-tenancy principle?", "Why does it matter?"]:
-        print("\nQuestion:", q)
-        answer, docs = service.ask(q)
-        print("Answer:", answer)
-        print("Sources:\n" + format_sources(docs))
+    test_questions = [
+        "What is the multi-tenancy principle?",
+        "Why does it matter?",
+        "What is 25 times 4?",
+    ]
 
+    for q in test_questions:
+        print("\nQuestion:", q)
+        answer, sources = service.ask_with_agent(q)
+        print("Answer:", answer)
+        if sources:
+            print("Sources:")
+            for s in sources:
+                print("  -", s)
+        else:
+            print("Sources: (agent ne document search nahi kiya)")
 
 
 
