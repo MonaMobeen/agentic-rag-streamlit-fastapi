@@ -1,3 +1,4 @@
+import re
 import io
 import os
 import uuid
@@ -258,6 +259,26 @@ class RAGService:
         messages.append({"role": "user", "content": question})
         return messages    
         
+    def ask_with_agent(self, question: str) -> tuple[str, list[str]]:
+        if self.agent is None:
+            raise RuntimeError("Please process documents before asking question")
+
+        messages = self._build_message_history(question)
+        result = self.agent.invoke({"messages": messages})
+
+        answer = result["messages"][-1].content
+
+        sources = []
+        for msg in result["messages"]:
+            if msg.__class__.__name__ == "ToolMessage":
+                found = re.findall(r"Source \d+: (.+?), Page (\d+)", msg.content)
+                for name, page in found:
+                    entry = f"{name} (Page {page})"
+                    if entry not in sources:
+                        sources.append(entry)
+
+        self.chat_history.append((question, answer))
+        return answer, sources    
 if __name__ == "__main__":
     class FakeUpload:
         def __init__(self, path):
