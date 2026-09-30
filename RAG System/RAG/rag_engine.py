@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 
 # Langchain Imports
+from langchain_core.tools import Tool
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -231,6 +232,19 @@ class RAGService:
         self.chat_history.append((question, answer))
         return answer, retrieved_docs
 
+    def _build_retriever_tool(self) -> Tool:
+        def run_retriever(query: str) -> str:
+            docs = self.retriever.invoke(query)
+            return format_context(docs)
+
+        return Tool(
+            name="search_documents",
+            description=(
+                "Search the uploaded documents to find information needed "
+                "to answer the user's question. Input should be a short search query."
+            ),
+            func=run_retriever,
+        )
 if __name__ == "__main__":
     class FakeUpload:
         def __init__(self, path):
