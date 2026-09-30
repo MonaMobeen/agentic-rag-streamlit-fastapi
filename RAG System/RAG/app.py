@@ -1,8 +1,8 @@
 import streamlit as st
 from rag_engine import RAGService, format_sources
 
-st.set_page_config(page_title="Document Q&A")
-st.title("Document Q&A (RAG)")
+st.set_page_config(page_title="Agentic Rag")
+st.title("Agentic Rag")
 
 if "service" not in st.session_state:
     st.session_state.service = None
