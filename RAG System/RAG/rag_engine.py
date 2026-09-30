@@ -250,6 +250,14 @@ class RAGService:
             ),
             func=run_retriever,
         )
+    def _build_message_history(self, question: str) -> list[dict]:
+        messages = []
+        for past_q, past_a in self.chat_history[-3:]:
+            messages.append({"role": "user", "content": past_q})
+            messages.append({"role": "assistant", "content": past_a})
+        messages.append({"role": "user", "content": question})
+        return messages    
+        
 if __name__ == "__main__":
     class FakeUpload:
         def __init__(self, path):
