@@ -8,6 +8,7 @@ from pypdf import PdfReader
 
 # Langchain Imports
 from langchain_core.tools import Tool
+from langgraph.prebuilt import create_react_agent
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -159,6 +160,8 @@ class RAGService:
         )
 
         self.vector_store = None
+        self.tool = None
+        self.agent = None
         self.retriever = None
         self.documents = []
         self.chunks = []
@@ -197,6 +200,8 @@ class RAGService:
                 },
             )
         )
+        self.tool = self._build_retriever_tool()
+        self.agent = create_react_agent(self.llm, tools=[self.tool])
 
         embedding_dimension = len(
             self.embedding_model.embed_query(
