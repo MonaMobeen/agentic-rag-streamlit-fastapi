@@ -202,7 +202,8 @@ class RAGService:
             )
         )
         self.tool = self._build_retriever_tool()
-        self.agent = create_react_agent(self.llm, tools=[self.tool])
+        self.summary_tool = self._build_summary_tool()
+        self.agent = create_react_agent(self.llm, tools=[self.tool, self.summary_tool])
 
         embedding_dimension = len(
             self.embedding_model.embed_query(
@@ -251,6 +252,25 @@ class RAGService:
             ),
             func=run_retriever,
         )
+    def _build_summary_tool(self) -> Tool:
+        def run_summary(session_text: str) -> str:
+            summary_prompt = ChatPromptTemplate.from_messages([
+                ("system",
+                 "Summarize the following conversation in 3-5 short bullet points. "
+                 "Mention what the user asked and what was answered."),
+                ("human", "{conversation}"),
+            ])
+            chain = summary_prompt | self.llm | StrOutputParser()
+            return chain.invoke({"conversation": session_text})
+
+        return Tool(
+            name="summarize_session",
+            description=(
+                "Summarize a previous chat session. Input must be the full text "
+                "of that session's conversation (questions and answers)."
+            ),
+            func=run_summary,
+        )    
     def _build_message_history(self, question: str) -> list[dict]:
         messages = []
         for past_q, past_a in self.chat_history[-3:]:

@@ -84,9 +84,23 @@ if question:
         with st.chat_message("user"):
             st.markdown(question)
 
+                other_sessions_text = ""
+        for sid, session in st.session_state.sessions.items():
+            if sid != current_id and session["messages"]:
+                lines = [f"{m['role']}: {m['content']}" for m in session["messages"]]
+                other_sessions_text += f"\n--- Session: {session['title']} ---\n" + "\n".join(lines)
+
+        augmented_question = question
+        if other_sessions_text:
+            augmented_question = (
+                f"{question}\n\n"
+                f"(If this question asks about a previous/other session, here is that data:\n"
+                f"{other_sessions_text})"
+            )
+
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                answer, sources_list = current["service"].ask_with_agent(question)
+                answer, sources_list = current["service"].ask_with_agent(augmented_question)
             sources = "\n".join(sources_list) if sources_list else "Document search nahi kiya gaya"
             st.markdown(answer)
             with st.expander("Sources"):
