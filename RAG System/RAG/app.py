@@ -46,8 +46,8 @@ if question:
 
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
-                answer, docs = st.session_state.service.ask(question)
-            sources = format_sources(docs)
+                answer, sources_list = st.session_state.service.ask_with_agent(question)
+            sources = "\n".join(sources_list) if sources_list else "Document search nahi kiya gaya"
             st.markdown(answer)
             with st.expander("Sources"):
                 st.text(sources)
