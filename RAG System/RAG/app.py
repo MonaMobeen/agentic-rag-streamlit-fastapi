@@ -4,8 +4,8 @@ import streamlit as st
 
 from rag_engine import RAGService
 
-st.set_page_config(page_title="Document Q&A")
-st.title("Document Q&A (RAG)")
+st.set_page_config(page_title="Agentic Rag")
+st.title("Agentic Rag")
 
 # ---------- Session management ----------
 
@@ -51,6 +51,7 @@ with st.sidebar:
         "Upload PDF or TXT",
         type=["pdf", "txt"],
         accept_multiple_files=True,
+        key=f"uploader_{current_id}",
     )
     if st.button("Process documents"):
         if not files:
