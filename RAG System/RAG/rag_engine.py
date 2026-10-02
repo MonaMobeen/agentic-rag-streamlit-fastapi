@@ -1,6 +1,6 @@
-import re
 import io
 import os
+import re
 import uuid
 from functools import lru_cache
 from typing import Iterable
@@ -8,15 +8,15 @@ from dotenv import load_dotenv
 from pypdf import PdfReader
 
 # Langchain Imports
-from langchain_core.tools import Tool
-from langgraph.prebuilt import create_react_agent
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.tools import Tool
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
+from langgraph.prebuilt import create_react_agent
 
 load_dotenv()
 
@@ -24,6 +24,7 @@ os.getenv("GROQ_API_KEY")
 
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 GROQ_MODEL = "openai/gpt-oss-120b"
+
 
 @lru_cache(maxsize=1)
 def get_embedding_model() -> HuggingFaceEmbeddings:
@@ -34,10 +35,8 @@ def get_embedding_model() -> HuggingFaceEmbeddings:
         encode_kwargs={"normalize_embeddings": True},
     )
 
-def load_uploaded_dcouments(
-    uploaded_files: Iterable
-) -> list[Document]:
 
+def load_uploaded_dcouments(uploaded_files: Iterable) -> list[Document]:
     documents: list[Document] = []
 
     for uploaded_file in uploaded_files:
@@ -48,7 +47,7 @@ def load_uploaded_dcouments(
 
         if extension == ".pdf":
             reader = PdfReader(io.BytesIO(file_bytes))
-            
+
             for page_number, page in enumerate(reader.pages, start=1):
                 text = page.extract_text() or ""
 
@@ -72,7 +71,7 @@ def load_uploaded_dcouments(
                         "file_type": "text"
                     },
                 ))
-        
+
         else:
             raise ValueError(f"Unsupported file type: {extension}")
 
@@ -80,6 +79,7 @@ def load_uploaded_dcouments(
         raise ValueError("No documents found in the uploaded files")
 
     return documents
+
 
 def format_context(documents: list[Document]) -> str:
     blocks = []
@@ -92,8 +92,9 @@ def format_context(documents: list[Document]) -> str:
         [Source {index}: {source}, Page {page}]
         {doc.page_content}
         """)
-    
+
     return "\n\n".join(blocks)
+
 
 def format_sources(documents: list[Document]) -> str:
     seen = []
@@ -104,6 +105,29 @@ def format_sources(documents: list[Document]) -> str:
         if entry not in seen:
             seen.append(entry)
     return "\n".join(f"  - {s}" for s in seen)
+
+
+# ---------- Guardrails ----------
+
+CNIC_PATTERN = re.compile(r"\b\d{5}-?\d{7}-?\d{1}\b")
+CARD_PATTERN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
+
+
+def redact_sensitive(text: str) -> str:
+    text = CNIC_PATTERN.sub("[REDACTED - CNIC]", text)
+    text = CARD_PATTERN.sub("[REDACTED - CARD/ACCOUNT NUMBER]", text)
+    return text
+
+
+AGENT_SYSTEM_PROMPT = (
+    "You are a document question-answering assistant. "
+    "Never reveal government ID numbers (such as CNIC), passport numbers, "
+    "credit card numbers, or other sensitive personal identifiers, even if "
+    "they appear in the retrieved documents. If asked for such information, "
+    "say it is sensitive and cannot be shared. Only use information from the "
+    "tools provided; do not make up facts that are not supported by them."
+)
+
 
 class RAGService:
     def __init__(
@@ -141,7 +165,7 @@ class RAGService:
                     "I couldn't find that information in the uploaded documents."
                     3. Keep the answer clear and concise.
                     4. When useful, mention the source filename and page number.
-   
+
                     Conversation so far (use it only to understand follow-up questions):
                     {history}
 
@@ -161,14 +185,16 @@ class RAGService:
         )
 
         self.vector_store = None
-        self.tool = None
-        self.agent = None
         self.retriever = None
         self.documents = []
         self.chunks = []
         self.chat_history: list[tuple[str, str]] = []
+        self.tool = None
+        self.summary_tool = None
+        self.agent = None
+
     def build_index(self, uploaded_files: Iterable) -> dict:
-        self.documents = load_uploaded_dcouments(uploaded_files)
+        new_documents = load_uploaded_dcouments(uploaded_files)
 
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=self.chunk_size,
@@ -176,68 +202,46 @@ class RAGService:
             add_start_index=True
         )
 
-        self.chunks = splitter.split_documents(
-            self.documents
-        )
+        new_chunks = splitter.split_documents(new_documents)
 
-        collection_name = (
-            f"rag_demo_{uuid.uuid4().hex}"
-        )
-
-        self.vector_store = Chroma(
-            collection_name=collection_name,
-            embedding_function=self.embedding_model,
-        )
-
-        self.vector_store.add_documents(
-            documents=self.chunks
-        )
-
-        self.retriever =(
-            self.vector_store.as_retriever(
-                search_type="similarity",
-                search_kwargs={
-                    "k": self.top_k
-                },
+        if self.vector_store is None:
+            collection_name = f"rag_demo_{uuid.uuid4().hex}"
+            self.vector_store = Chroma(
+                collection_name=collection_name,
+                embedding_function=self.embedding_model,
             )
+
+        self.vector_store.add_documents(documents=new_chunks)
+
+        self.documents = self.documents + new_documents
+        self.chunks = self.chunks + new_chunks
+
+        self.retriever = self.vector_store.as_retriever(
+            search_type="similarity",
+            search_kwargs={
+                "k": self.top_k
+            },
         )
+
         self.tool = self._build_retriever_tool()
         self.summary_tool = self._build_summary_tool()
-        self.agent = create_react_agent(self.llm, tools=[self.tool, self.summary_tool])
+        self.agent = create_react_agent(
+            self.llm,
+            tools=[self.tool, self.summary_tool],
+            prompt=AGENT_SYSTEM_PROMPT,
+        )
 
         embedding_dimension = len(
-            self.embedding_model.embed_query(
-                "dimension check"
-            )
+            self.embedding_model.embed_query("dimension check")
         )
 
         return {
-            "documents" : len(self.documents),
-            "chunks" : len(self.chunks),
-            "embedding_dimension" : embedding_dimension,
-            "embedding_model" : EMBEDDING_MODEL,
-            "llm_model"  : GROQ_MODEL,
+            "documents": len(self.documents),
+            "chunks": len(self.chunks),
+            "embedding_dimension": embedding_dimension,
+            "embedding_model": EMBEDDING_MODEL,
+            "llm_model": GROQ_MODEL,
         }
-    
-    def ask(self, question: str) -> tuple[str, list[Document]]:
-        if self.retriever is None:
-            raise RuntimeError("Please process documents before asking question")
-
-        retrieved_docs = self.retriever.invoke(question)
-        context = format_context(retrieved_docs)
-
-        history = "\n".join(
-            f"User: {q}\nAssistant: {a}" for q, a in self.chat_history[-3:]
-        ) or "No previous conversation."
-
-        answer = self.answer_chain.invoke({
-            "context": context,
-            "history": history,
-            "question": question,
-        })
-
-        self.chat_history.append((question, answer))
-        return answer, retrieved_docs
 
     def _build_retriever_tool(self) -> Tool:
         def run_retriever(query: str) -> str:
@@ -252,6 +256,7 @@ class RAGService:
             ),
             func=run_retriever,
         )
+
     def _build_summary_tool(self) -> Tool:
         def run_summary(session_text: str) -> str:
             summary_prompt = ChatPromptTemplate.from_messages([
@@ -270,15 +275,98 @@ class RAGService:
                 "of that session's conversation (questions and answers)."
             ),
             func=run_summary,
-        )    
+        )
+
     def _build_message_history(self, question: str) -> list[dict]:
         messages = []
         for past_q, past_a in self.chat_history[-3:]:
             messages.append({"role": "user", "content": past_q})
             messages.append({"role": "assistant", "content": past_a})
         messages.append({"role": "user", "content": question})
-        return messages    
-        
+        return messages
+
+    def ask(self, question: str) -> tuple[str, list[Document]]:
+        if self.retriever is None:
+            raise RuntimeError("Please process documents before asking question")
+
+        retrieved_docs = self.retriever.invoke(question)
+        context = format_context(retrieved_docs)
+
+        history = "\n".join(
+            f"User: {q}\nAssistant: {a}" for q, a in self.chat_history[-3:]
+        ) or "No previous conversation."
+
+        answer = redact_sensitive(self.answer_chain.invoke({
+            "context": context,
+            "history": history,
+            "question": question,
+        }))
+
+        self.chat_history.append((question, answer))
+        return answer, retrieved_docs
+
+    def ask_agentic(self, question: str) -> tuple[str, list[Document]]:
+        if self.retriever is None:
+            raise RuntimeError("Please process documents before asking question")
+
+        standalone_question = self._rewrite_question(question)
+
+        retrieved_docs = self.retriever.invoke(standalone_question)
+        is_relevant = self._grade_documents(standalone_question, retrieved_docs)
+
+        if not is_relevant:
+            broader_query = f"Explain in detail: {standalone_question}"
+            retrieved_docs = self.retriever.invoke(broader_query)
+
+        context = format_context(retrieved_docs)
+        history = "\n".join(
+            f"User: {q}\nAssistant: {a}" for q, a in self.chat_history[-3:]
+        ) or "No previous conversation."
+
+        answer = self.answer_chain.invoke({
+            "context": context,
+            "history": history,
+            "question": standalone_question,
+        })
+
+        self.chat_history.append((question, answer))
+        return answer, retrieved_docs
+
+    def _rewrite_question(self, question: str) -> str:
+        if not self.chat_history:
+            return question
+
+        history = "\n".join(
+            f"User: {q}\nAssistant: {a}" for q, a in self.chat_history[-3:]
+        )
+
+        rewrite_prompt = ChatPromptTemplate.from_messages([
+            ("system",
+             "Rewrite the user's latest question into a standalone question "
+             "using the conversation history, so it makes sense without the history. "
+             "If it is already standalone, return it unchanged. "
+             "Return ONLY the rewritten question, nothing else."),
+            ("human", "History:\n{history}\n\nLatest question: {question}"),
+        ])
+        chain = rewrite_prompt | self.llm | StrOutputParser()
+        return chain.invoke({"history": history, "question": question}).strip()
+
+    def _grade_documents(self, question: str, documents: list[Document]) -> bool:
+        if not documents:
+            return False
+
+        context = format_context(documents)
+        grade_prompt = ChatPromptTemplate.from_messages([
+            ("system",
+             "You check whether the given context contains information "
+             "relevant to answering the question. "
+             "Reply with exactly one word: 'yes' or 'no'."),
+            ("human", "Question: {question}\n\nContext:\n{context}"),
+        ])
+        chain = grade_prompt | self.llm | StrOutputParser()
+        verdict = chain.invoke({"question": question, "context": context}).strip().lower()
+        return verdict.startswith("yes")
+
     def ask_with_agent(self, question: str) -> tuple[str, list[str]]:
         if self.agent is None:
             raise RuntimeError("Please process documents before asking question")
@@ -286,7 +374,7 @@ class RAGService:
         messages = self._build_message_history(question)
         result = self.agent.invoke({"messages": messages})
 
-        answer = result["messages"][-1].content
+        answer = redact_sensitive(result["messages"][-1].content)
 
         sources = []
         for msg in result["messages"]:
@@ -298,7 +386,9 @@ class RAGService:
                         sources.append(entry)
 
         self.chat_history.append((question, answer))
-        return answer, sources    
+        return answer, sources
+
+
 if __name__ == "__main__":
     class FakeUpload:
         def __init__(self, path):
@@ -334,14 +424,3 @@ if __name__ == "__main__":
                 print("  -", s)
         else:
             print("Sources: (agent ne document search nahi kiya)")
-
-
-
-
-        
-
-
-
-    
-    
-
