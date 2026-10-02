@@ -84,7 +84,7 @@ if question:
         with st.chat_message("user"):
             st.markdown(question)
 
-                other_sessions_text = ""
+            other_sessions_text = ""
         for sid, session in st.session_state.sessions.items():
             if sid != current_id and session["messages"]:
                 lines = [f"{m['role']}: {m['content']}" for m in session["messages"]]
