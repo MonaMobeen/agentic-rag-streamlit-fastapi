@@ -121,13 +121,16 @@ def redact_sensitive(text: str) -> str:
 
 AGENT_SYSTEM_PROMPT = (
     "You are a document question-answering assistant. "
+    "For ANY question that could relate to the uploaded documents, you MUST call "
+    "the search_documents tool first before answering, even if you think you already "
+    "know the answer from general knowledge. Only skip the tool for simple arithmetic "
+    "or questions explicitly about a previous chat session. "
+    "If the search_documents tool returns no relevant information, reply exactly: "
+    "\"I couldn't find that information in the uploaded documents.\" "
     "Never reveal government ID numbers (such as CNIC), passport numbers, "
     "credit card numbers, or other sensitive personal identifiers, even if "
-    "they appear in the retrieved documents. If asked for such information, "
-    "say it is sensitive and cannot be shared. Only use information from the "
-    "tools provided; do not make up facts that are not supported by them."
+    "they appear in the retrieved documents."
 )
-
 
 class RAGService:
     def __init__(
