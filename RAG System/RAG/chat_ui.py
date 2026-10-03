@@ -1,13 +1,24 @@
 import streamlit as st
 
 
+def _render_sources(sources_text: str):
+    st.markdown('<div class="citation-strip">', unsafe_allow_html=True)
+    if sources_text and sources_text != "Document search nahi kiya gaya":
+        for line in sources_text.split("\n"):
+            line = line.strip().lstrip("- ")
+            if line:
+                st.markdown(f"&mdash; {line}", unsafe_allow_html=True)
+    else:
+        st.markdown('<span class="no-cite">No document was consulted for this answer.</span>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def render_chat_history(current: dict):
     for msg in current["messages"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            if msg.get("sources"):
-                with st.expander("📎 Sources"):
-                    st.text(msg["sources"])
+            if msg["role"] == "assistant":
+                _render_sources(msg.get("sources", ""))
 
 
 def _build_augmented_question(question: str, current_id: str) -> str:
@@ -34,7 +45,7 @@ def handle_new_question(current: dict, current_id: str):
         return
 
     if current["service"] is None:
-        st.warning("Upload and process documents first (left sidebar).")
+        st.warning("Upload and process documents first, in the sidebar.")
         return
 
     current["messages"].append({"role": "user", "content": question})
@@ -49,7 +60,6 @@ def handle_new_question(current: dict, current_id: str):
 
         sources = "\n".join(sources_list) if sources_list else "Document search nahi kiya gaya"
         st.markdown(answer)
-        with st.expander("📎 Sources"):
-            st.text(sources)
+        _render_sources(sources)
 
     current["messages"].append({"role": "assistant", "content": answer, "sources": sources})
