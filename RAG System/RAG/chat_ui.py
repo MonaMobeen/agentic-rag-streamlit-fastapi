@@ -1,64 +1,297 @@
 import html
+import json
+import time
+import traceback
 
 import streamlit as st
+
+from theme import LOGO_SVG, get_palette
+
+try:
+    import streamlit.components.v1 as components
+except Exception:  # copy button simply won't render
+    components = None
 
 # Kept as-is so sessions already stored with this value still render correctly.
 NO_SEARCH = "Document search nahi kiya gaya"
 
-_EMPTY_STATE_HTML = """
-<div class="empty-state">
-    <h3>Start with a document</h3>
-    <p>
-        Upload and process your files in the sidebar, then ask a question.
-        The agent searches them only when it needs to, and lists the sources
-        it used under each answer.
-    </p>
-</div>
-"""
+# label shown on the card -> question sent to the agent
+SUGGESTIONS = {
+    "Summarize my documents": "Summarize the uploaded documents in a few bullet points.",
+    "List the key points": "What are the key points I should know from these documents?",
+    "Find the main requirements": "List the main requirements mentioned in the documents.",
+    "Explain the core concept": "Explain the most important concept in these documents in simple terms.",
+}
+
+_TYPING_HTML = (
+    '<div class="agent-working" role="status" aria-live="polite">'
+    '<span class="dots"><i></i><i></i><i></i></span>'
+    "<span>The agent is working on your question...</span></div>"
+)
+
+_ERROR_TITLE = "Unable to generate a response."
+_ERROR_BODY = (
+    "Something went wrong while handling your question. "
+    "Your question is saved, so you can try again."
+)
 
 
-def _sources_html(sources_text: str) -> str:
-    # One complete HTML block. Splitting <div> open/close across separate
-    # st.markdown calls does not wrap anything in Streamlit.
-    if not sources_text or sources_text == NO_SEARCH:
-        return '<div class="sources sources-none">Answered without searching your documents.</div>'
+# =========================================================
+# SOURCES / META
+# =========================================================
+
+
+def _has_sources(sources_text: str) -> bool:
+    return bool(sources_text) and sources_text != NO_SEARCH
+
+
+def _render_meta(msg: dict):
+    meta = msg.get("meta") or {}
+    searched = _has_sources(msg.get("sources", ""))
+
+    chips = []
+    if searched:
+        chips.append('<span class="chip ok"><i></i>Searched your documents</span>')
+    else:
+        chips.append('<span class="chip"><i></i>Answered without searching</span>')
+    if meta.get("elapsed") is not None:
+        chips.append(f'<span class="chip">{meta["elapsed"]:.1f} s</span>')
+
+    st.markdown(f'<div class="meta-row">{"".join(chips)}</div>', unsafe_allow_html=True)
+
+
+def _render_sources(sources_text: str, open_default: bool):
+    if not _has_sources(sources_text):
+        return
 
     items = [line.strip().lstrip("- ").strip() for line in sources_text.splitlines()]
     items = [item for item in items if item]
     if not items:
-        return '<div class="sources sources-none">Answered without searching your documents.</div>'
+        return
 
-    rows = "".join(f"<li>{html.escape(item)}</li>" for item in items)
-    return (
-        '<div class="sources">'
-        '<div class="sources-title">Sources</div>'
-        f"<ul>{rows}</ul>"
-        "</div>"
+    rows = "".join(
+        f'<li><span class="src-n">{i}</span><span class="src-t">{html.escape(item)}</span></li>'
+        for i, item in enumerate(items, start=1)
+    )
+    label = f"{len(items)} source{'s' if len(items) != 1 else ''}"
+    is_open = " open" if open_default else ""
+    # Single line, no blank lines: markdown would otherwise break the HTML block.
+    st.markdown(
+        f'<details class="sources"{is_open}><summary>{label}</summary><ol>{rows}</ol></details>',
+        unsafe_allow_html=True,
     )
 
 
-def _render_sources(sources_text: str):
-    st.markdown(_sources_html(sources_text), unsafe_allow_html=True)
+# =========================================================
+# ACTIONS (copy / regenerate)
+# =========================================================
 
 
-def render_chat_history(current: dict):
-    if not current["messages"]:
-        st.markdown(_EMPTY_STATE_HTML, unsafe_allow_html=True)
+def _copy_button(text: str):
+    if components is None:
         return
 
-    for msg in current["messages"]:
+    p = get_palette()
+    scheme = p["scheme"]
+    payload = json.dumps(text).replace("</", "<\\/")
+
+    components.html(
+        f"""
+<!doctype html>
+<html>
+<head>
+<meta name="color-scheme" content="{scheme}">
+<style>
+  html, body {{ margin: 0; background: transparent; color-scheme: {scheme}; }}
+  button {{
+    width: 100%; height: 32px; padding: 0 12px; cursor: pointer;
+    font: 500 12.5px system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: {p["muted"]}; background: transparent;
+    border: 1px solid {p["line"]}; border-radius: 8px;
+    transition: color .12s ease-out, border-color .12s ease-out, transform .12s ease-out;
+  }}
+  button:hover {{ color: {p["ink"]}; border-color: {p["muted"]}; }}
+  button:active {{ transform: scale(.97); }}
+  button.done {{ color: {p["success"]}; border-color: {p["success"]}; }}
+  button:focus-visible {{ outline: 2px solid {p["accent_text"]}; outline-offset: 2px; }}
+</style>
+</head>
+<body>
+<button id="b" type="button">Copy</button>
+<script>
+  const text = {payload};
+  const b = document.getElementById("b");
+  function fallback() {{
+    const t = document.createElement("textarea");
+    t.value = text; t.style.position = "fixed"; t.style.opacity = "0";
+    document.body.appendChild(t); t.select();
+    let ok = false;
+    try {{ ok = document.execCommand("copy"); }} catch (e) {{}}
+    document.body.removeChild(t);
+    return ok;
+  }}
+  b.addEventListener("click", async () => {{
+    let ok = false;
+    try {{ await navigator.clipboard.writeText(text); ok = true; }}
+    catch (e) {{ ok = fallback(); }}
+    b.textContent = ok ? "Copied" : "Copy failed";
+    b.classList.toggle("done", ok);
+    setTimeout(() => {{ b.textContent = "Copy"; b.classList.remove("done"); }}, 1600);
+  }});
+</script>
+</body>
+</html>
+""",
+        height=36,
+        width=84,
+    )
+
+
+def _ask_later(question: str):
+    """Button callback: queue a question to be answered on the next run."""
+    st.session_state.pending_question = question
+
+
+def _regenerate(current: dict):
+    """Button callback: drop the last answer and queue its question again."""
+    messages = current["messages"]
+    if messages and messages[-1]["role"] == "assistant":
+        messages.pop()
+    if messages and messages[-1]["role"] == "user":
+        st.session_state.pending_question = messages.pop()["content"]
+
+
+def _render_actions(current: dict, current_id: str, index: int, msg: dict, is_last: bool):
+    show_copy = not msg.get("error")
+    show_regen = is_last
+
+    if not (show_copy or show_regen):
+        return
+
+    with st.container(key=f"actions_{current_id}_{index}"):
+        cols = st.columns(int(show_copy) + int(show_regen))
+        slot = 0
+        if show_copy:
+            with cols[slot]:
+                _copy_button(msg["content"])
+            slot += 1
+        if show_regen:
+            with cols[slot]:
+                st.button(
+                    "Try again" if msg.get("error") else "Regenerate",
+                    key=f"regen_{current_id}_{index}",
+                    on_click=_regenerate,
+                    args=(current,),
+                )
+
+
+# =========================================================
+# ERRORS
+# =========================================================
+
+
+def _render_error(msg: dict):
+    st.markdown(
+        f'<div class="error-card"><b>{_ERROR_TITLE}</b><br>{_ERROR_BODY}</div>',
+        unsafe_allow_html=True,
+    )
+    if msg.get("details"):
+        with st.expander("Technical details"):
+            st.code(msg["details"], language="text")
+
+
+# =========================================================
+# EMPTY STATE
+# =========================================================
+
+
+def _render_empty_state(current: dict):
+    st.markdown(
+        '<div class="empty-state">'
+        f'<div class="empty-mark">{LOGO_SVG}</div>'
+        "<h2>Ask questions about your documents</h2>"
+        "<p>The agent searches your files when it needs to, answers from context "
+        "when it can, and says so when it doesn't know. Sources appear under "
+        "every answer that used them.</p>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if current["service"] is None:
+        st.markdown(
+            '<ol class="empty-steps">'
+            "<li><b>Upload</b> files in the sidebar</li>"
+            "<li><b>Process</b> them</li>"
+            "<li><b>Ask</b> a question</li>"
+            "</ol>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    st.markdown('<div class="suggest-label">Try asking</div>', unsafe_allow_html=True)
+    with st.container(key="suggestions"):
+        columns = st.columns(2)
+        for i, (label, question) in enumerate(SUGGESTIONS.items()):
+            with columns[i % 2]:
+                st.button(
+                    label,
+                    key=f"suggest_{i}",
+                    on_click=_ask_later,
+                    args=(question,),
+                    use_container_width=True,
+                )
+
+
+# =========================================================
+# CHAT HISTORY
+# =========================================================
+
+
+def render_chat_history(current: dict, current_id: str):
+    messages = current["messages"]
+
+    if not messages:
+        _render_empty_state(current)
+        return
+
+    assistant_indexes = [i for i, m in enumerate(messages) if m["role"] == "assistant"]
+    last_assistant = assistant_indexes[-1] if assistant_indexes else None
+
+    for i, msg in enumerate(messages):
+        is_last = i == last_assistant
+
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if msg["role"] == "assistant":
-                _render_sources(msg.get("sources", ""))
+            if msg.get("error"):
+                _render_error(msg)
+            else:
+                st.markdown(msg["content"])
+
+            if msg["role"] != "assistant":
+                continue
+
+            if not msg.get("error"):
+                _render_meta(msg)
+                _render_sources(msg.get("sources", ""), open_default=is_last)
+
+            _render_actions(current, current_id, i, msg, is_last)
+
+
+# =========================================================
+# NEW QUESTION
+# =========================================================
 
 
 def _build_augmented_question(question: str, current_id: str) -> str:
     other_sessions_text = ""
     for sid, session in st.session_state.sessions.items():
         if sid != current_id and session["messages"]:
-            lines = [f"{m['role']}: {m['content']}" for m in session["messages"]]
-            other_sessions_text += f"\n--- Session: {session['title']} ---\n" + "\n".join(lines)
+            lines = [
+                f"{m['role']}: {m['content']}"
+                for m in session["messages"]
+                if not m.get("error")
+            ]
+            if lines:
+                other_sessions_text += f"\n--- Session: {session['title']} ---\n" + "\n".join(lines)
 
     if not other_sessions_text:
         return question
@@ -71,12 +304,21 @@ def _build_augmented_question(question: str, current_id: str) -> str:
 
 
 def handle_new_question(current: dict, current_id: str):
-    question = st.chat_input("Ask a question about your documents")
+    ready = current["service"] is not None
+
+    typed = st.chat_input(
+        "Ask a question about your documents"
+        if ready
+        else "Upload and process documents in the sidebar to start",
+        disabled=not ready,
+    )
+    # Typed text wins; otherwise use a question queued by a suggestion or Regenerate.
+    question = typed or st.session_state.pop("pending_question", None)
 
     if not question:
         return
 
-    if current["service"] is None:
+    if not ready:
         st.warning("Upload and process your documents in the sidebar first.")
         return
 
@@ -86,12 +328,43 @@ def handle_new_question(current: dict, current_id: str):
 
     augmented_question = _build_augmented_question(question, current_id)
 
+    answer = None
+    sources_list = None
+    failure = None
+
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
+        placeholder = st.empty()
+        placeholder.markdown(_TYPING_HTML, unsafe_allow_html=True)
+
+        started = time.perf_counter()
+        try:
             answer, sources_list = current["service"].ask_with_agent(augmented_question)
+        except Exception as exc:
+            failure = f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}"
+        elapsed = time.perf_counter() - started
 
+        placeholder.empty()
+
+    if failure is not None:
+        current["messages"].append(
+            {
+                "role": "assistant",
+                "content": _ERROR_TITLE,
+                "sources": "",
+                "error": True,
+                "details": failure,
+            }
+        )
+    else:
         sources = "\n".join(sources_list) if sources_list else NO_SEARCH
-        st.markdown(answer)
-        _render_sources(sources)
+        current["messages"].append(
+            {
+                "role": "assistant",
+                "content": answer,
+                "sources": sources,
+                "meta": {"elapsed": elapsed},
+            }
+        )
 
-    current["messages"].append({"role": "assistant", "content": answer, "sources": sources})
+    # Re-render from history so the new message gets copy/regenerate/sources.
+    st.rerun()
