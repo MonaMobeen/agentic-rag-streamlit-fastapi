@@ -1,19 +1,51 @@
+import html
+
 import streamlit as st
+
+# Kept as-is so sessions already stored with this value still render correctly.
+NO_SEARCH = "Document search nahi kiya gaya"
+
+_EMPTY_STATE_HTML = """
+<div class="empty-state">
+    <h3>Start with a document</h3>
+    <p>
+        Upload and process your files in the sidebar, then ask a question.
+        The agent searches them only when it needs to, and lists the sources
+        it used under each answer.
+    </p>
+</div>
+"""
+
+
+def _sources_html(sources_text: str) -> str:
+    # One complete HTML block. Splitting <div> open/close across separate
+    # st.markdown calls does not wrap anything in Streamlit.
+    if not sources_text or sources_text == NO_SEARCH:
+        return '<div class="sources sources-none">Answered without searching your documents.</div>'
+
+    items = [line.strip().lstrip("- ").strip() for line in sources_text.splitlines()]
+    items = [item for item in items if item]
+    if not items:
+        return '<div class="sources sources-none">Answered without searching your documents.</div>'
+
+    rows = "".join(f"<li>{html.escape(item)}</li>" for item in items)
+    return (
+        '<div class="sources">'
+        '<div class="sources-title">Sources</div>'
+        f"<ul>{rows}</ul>"
+        "</div>"
+    )
 
 
 def _render_sources(sources_text: str):
-    st.markdown('<div class="citation-strip">', unsafe_allow_html=True)
-    if sources_text and sources_text != "Document search nahi kiya gaya":
-        for line in sources_text.split("\n"):
-            line = line.strip().lstrip("- ")
-            if line:
-                st.markdown(f"&mdash; {line}", unsafe_allow_html=True)
-    else:
-        st.markdown('<span class="no-cite">No document was consulted for this answer.</span>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown(_sources_html(sources_text), unsafe_allow_html=True)
 
 
 def render_chat_history(current: dict):
+    if not current["messages"]:
+        st.markdown(_EMPTY_STATE_HTML, unsafe_allow_html=True)
+        return
+
     for msg in current["messages"]:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -45,7 +77,7 @@ def handle_new_question(current: dict, current_id: str):
         return
 
     if current["service"] is None:
-        st.warning("Upload and process documents first, in the sidebar.")
+        st.warning("Upload and process your documents in the sidebar first.")
         return
 
     current["messages"].append({"role": "user", "content": question})
@@ -58,7 +90,7 @@ def handle_new_question(current: dict, current_id: str):
         with st.spinner("Thinking..."):
             answer, sources_list = current["service"].ask_with_agent(augmented_question)
 
-        sources = "\n".join(sources_list) if sources_list else "Document search nahi kiya gaya"
+        sources = "\n".join(sources_list) if sources_list else NO_SEARCH
         st.markdown(answer)
         _render_sources(sources)
 
