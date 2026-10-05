@@ -4,6 +4,7 @@ import streamlit as st
 
 from auth_ui import render_auth_screen
 from chat_ui import handle_new_question, render_chat_history
+from observability_ui import render_observability
 from session_manager import (
     get_current_session,
     init_sessions,
@@ -33,6 +34,9 @@ if "username" not in st.session_state:
 if "ui_theme" not in st.session_state:
     st.session_state.ui_theme = "dark"
 
+if "page" not in st.session_state:
+    st.session_state.page = "chat"
+
 inject_custom_css()
 
 
@@ -60,6 +64,8 @@ def _logout():
     st.session_state.logged_in = False
     st.session_state.username = ""
     st.session_state.pop("pending_question", None)
+    st.session_state.pop("obs_trace_id", None)
+    st.session_state.page = "chat"
 
 
 # =========================================================
@@ -106,9 +112,11 @@ with logout_col:
 
 
 # =========================================================
-# CHAT
+# PAGE (chat or observability)
 # =========================================================
 
-render_chat_history(current, current_id)
-
-handle_new_question(current, current_id)
+if st.session_state.page == "observability":
+    render_observability(st.session_state.username)
+else:
+    render_chat_history(current, current_id)
+    handle_new_question(current, current_id)

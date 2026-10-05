@@ -5,6 +5,8 @@ import traceback
 
 import streamlit as st
 
+from observability import store
+from observability.tracer import start_trace
 from theme import LOGO_SVG, get_palette
 
 try:
@@ -83,19 +85,28 @@ def _render_sources(sources_text: str, open_default: bool):
 
 
 # =========================================================
-# ACTIONS (copy / regenerate)
+# ACTIONS (copy / regenerate / feedback / view trace)
 # =========================================================
 
 
+def _show_html(doc: str, height: int, width: int):
+    """st.components.v1.html is deprecated; prefer st.iframe when available."""
+    doc = doc.strip()
+    if hasattr(st, "iframe"):
+        st.iframe(doc, width=width, height=height)
+    elif components is not None:
+        components.html(doc, width=width, height=height)
+
+
 def _copy_button(text: str):
-    if components is None:
+    if components is None and not hasattr(st, "iframe"):
         return
 
     p = get_palette()
     scheme = p["scheme"]
     payload = json.dumps(text).replace("</", "<\\/")
 
-    components.html(
+    _show_html(
         f"""
 <!doctype html>
 <html>
@@ -159,30 +170,107 @@ def _regenerate(current: dict):
         messages.pop()
     if messages and messages[-1]["role"] == "user":
         st.session_state.pending_question = messages.pop()["content"]
+        st.session_state.pending_regenerated = True
+
+
+def _rate(msg: dict, rating: str):
+    """Button callback: save thumbs up/down for this answer's trace."""
+    trace_id = msg.get("trace_id")
+    if not trace_id:
+        return
+    if (msg.get("feedback") or {}).get("rating") == rating:
+        return
+    msg["feedback"] = {"rating": rating, "comment": "", "comment_done": rating == "up"}
+    try:
+        store.save_feedback(trace_id, st.session_state.get("username", ""), rating, "")
+    except Exception:
+        pass
+
+
+def _view_trace(trace_id: str):
+    """Button callback: open this answer's trace in the Observability page."""
+    st.session_state.page = "observability"
+    st.session_state.obs_trace_id = trace_id
 
 
 def _render_actions(current: dict, current_id: str, index: int, msg: dict, is_last: bool):
-    show_copy = not msg.get("error")
-    show_regen = is_last
+    is_error = bool(msg.get("error"))
+    trace_id = msg.get("trace_id")
+    feedback = msg.get("feedback") or {}
 
-    if not (show_copy or show_regen):
+    actions = []
+    if not is_error:
+        actions.append("copy")
+    if is_last:
+        actions.append("regen")
+    if not is_error:
+        actions += ["up", "down"]
+    if trace_id:
+        actions.append("trace")
+
+    if not actions:
         return
 
     with st.container(key=f"actions_{current_id}_{index}"):
-        cols = st.columns(int(show_copy) + int(show_regen))
-        slot = 0
-        if show_copy:
-            with cols[slot]:
-                _copy_button(msg["content"])
-            slot += 1
-        if show_regen:
-            with cols[slot]:
-                st.button(
-                    "Try again" if msg.get("error") else "Regenerate",
-                    key=f"regen_{current_id}_{index}",
-                    on_click=_regenerate,
-                    args=(current,),
+        columns = st.columns(len(actions))
+        for column, action in zip(columns, actions):
+            with column:
+                if action == "copy":
+                    _copy_button(msg["content"])
+                elif action == "regen":
+                    st.button(
+                        "Try again" if is_error else "Regenerate",
+                        key=f"regen_{current_id}_{index}",
+                        on_click=_regenerate,
+                        args=(current,),
+                    )
+                elif action in ("up", "down"):
+                    st.button(
+                        ":material/thumb_up:" if action == "up" else ":material/thumb_down:",
+                        key=f"rate_{action}_{current_id}_{index}",
+                        type="primary" if feedback.get("rating") == action else "secondary",
+                        help="Helpful" if action == "up" else "Not helpful",
+                        on_click=_rate,
+                        args=(msg, action),
+                    )
+                else:
+                    st.button(
+                        "View trace",
+                        key=f"trace_{current_id}_{index}",
+                        on_click=_view_trace,
+                        args=(trace_id,),
+                    )
+
+
+def _render_feedback_followup(msg: dict):
+    feedback = msg.get("feedback")
+    trace_id = msg.get("trace_id")
+    if not feedback or not trace_id:
+        return
+
+    if feedback["rating"] == "down" and not feedback.get("comment_done"):
+        with st.form(f"fb_form_{trace_id}", border=False):
+            comment = st.text_input(
+                "What went wrong? (optional)",
+                key=f"fb_comment_{trace_id}",
+                placeholder="For example: the answer missed a detail from the document",
+            )
+            sent = st.form_submit_button("Send feedback")
+        if sent:
+            feedback["comment"] = comment.strip()
+            feedback["comment_done"] = True
+            try:
+                store.save_feedback(
+                    trace_id,
+                    st.session_state.get("username", ""),
+                    "down",
+                    feedback["comment"],
                 )
+            except Exception:
+                pass
+            st.rerun()
+    else:
+        st.caption("Thanks, your feedback was saved.")
 
 
 # =========================================================
@@ -274,6 +362,7 @@ def render_chat_history(current: dict, current_id: str):
                 _render_sources(msg.get("sources", ""), open_default=is_last)
 
             _render_actions(current, current_id, i, msg, is_last)
+            _render_feedback_followup(msg)
 
 
 # =========================================================
@@ -318,6 +407,8 @@ def handle_new_question(current: dict, current_id: str):
     if not question:
         return
 
+    regenerated = bool(st.session_state.pop("pending_regenerated", False))
+
     if not ready:
         st.warning("Upload and process your documents in the sidebar first.")
         return
@@ -328,9 +419,20 @@ def handle_new_question(current: dict, current_id: str):
 
     augmented_question = _build_augmented_question(question, current_id)
 
+    trace = start_trace(
+        session_id=current_id,
+        username=st.session_state.get("username", ""),
+        question=question,
+        attributes={
+            "regenerated": regenerated,
+            "cross_session_context_chars": len(augmented_question) - len(question),
+        },
+    )
+
     answer = None
     sources_list = None
     failure = None
+    error = None
 
     with st.chat_message("assistant"):
         placeholder = st.empty()
@@ -338,12 +440,22 @@ def handle_new_question(current: dict, current_id: str):
 
         started = time.perf_counter()
         try:
-            answer, sources_list = current["service"].ask_with_agent(augmented_question)
+            with trace.span("Agent run (ask_with_agent)", "agent") as span:
+                answer, sources_list = current["service"].ask_with_agent(augmented_question)
+                span.set_output(f"{len(sources_list or [])} source(s) returned")
+            # Optional hook: used only if the backend exposes service.last_run_info.
+            trace.apply_run_info(
+                getattr(current["service"], "last_run_info", None),
+                offset_ms=span.start_ms,
+            )
         except Exception as exc:
+            error = exc
             failure = f"{type(exc).__name__}: {exc}\n\n{traceback.format_exc()}"
         elapsed = time.perf_counter() - started
 
         placeholder.empty()
+
+    trace_id = trace.finish(answer=answer, sources=sources_list, error=error)
 
     if failure is not None:
         current["messages"].append(
@@ -353,6 +465,7 @@ def handle_new_question(current: dict, current_id: str):
                 "sources": "",
                 "error": True,
                 "details": failure,
+                "trace_id": trace_id,
             }
         )
     else:
@@ -363,8 +476,9 @@ def handle_new_question(current: dict, current_id: str):
                 "content": answer,
                 "sources": sources,
                 "meta": {"elapsed": elapsed},
+                "trace_id": trace_id,
             }
         )
 
-    # Re-render from history so the new message gets copy/regenerate/sources.
+    # Re-render from history so the new message gets its actions and sources.
     st.rerun()

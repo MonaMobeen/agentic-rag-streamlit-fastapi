@@ -8,6 +8,7 @@ from rag_engine import RAGService
 
 MAX_TITLE_LEN = 40
 SEARCH_THRESHOLD = 4  # show the search box once there are more sessions than this
+NAV_ITEMS = [("chat", " New Chat"), ("observability", "Observability")]
 
 
 # =========================================================
@@ -42,6 +43,10 @@ def get_current_session():
 # =========================================================
 
 
+def _go_page(page: str):
+    st.session_state.page = page
+
+
 def _start_new_session():
     st.session_state.current_session_id = new_session()
 
@@ -69,6 +74,33 @@ def _delete_session(session_id: str):
             st.session_state.current_session_id = list(sessions)[-1]
         else:
             st.session_state.current_session_id = new_session()
+
+
+# =========================================================
+# NAVIGATION
+# =========================================================
+
+
+def _render_nav():
+    page = st.session_state.get("page", "chat")
+    st.markdown('<p class="index-label">Workspace</p>', unsafe_allow_html=True)
+
+    for key, label in NAV_ITEMS:
+        if key == page:
+            st.markdown(
+                f'<div class="session-card-active">{html.escape(label)}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            st.button(
+                label,
+                key=f"nav_{key}",
+                on_click=_go_page,
+                args=(key,),
+                use_container_width=True,
+            )
+
+    st.markdown('<div class="nav-sep"></div>', unsafe_allow_html=True)
 
 
 # =========================================================
@@ -262,5 +294,9 @@ def _render_documents(current_id: str, current: dict):
 
 def render_sidebar(current_id: str, current: dict):
     with st.sidebar:
-        _render_sessions(current_id)
-        _render_documents(current_id, current)
+        _render_nav()
+
+        # Sessions and documents belong to the chat workspace.
+        if st.session_state.get("page", "chat") == "chat":
+            _render_sessions(current_id)
+            _render_documents(current_id, current)
