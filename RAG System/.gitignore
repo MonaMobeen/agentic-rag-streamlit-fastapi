@@ -3,4 +3,3 @@
 *.pyc  
 *.json
 observability.db*
-*.txt
