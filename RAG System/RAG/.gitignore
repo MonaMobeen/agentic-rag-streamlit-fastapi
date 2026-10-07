@@ -1,0 +1,12 @@
+.env
+.env.*
+users.json
+observability.db
+observability.db-wal
+observability.db-shm
+build_log.txt
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/

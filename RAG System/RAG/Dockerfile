@@ -1,10 +1,10 @@
-# syntax=docker/dockerfile:1
 FROM python:3.14-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DEFAULT_TIMEOUT=120 \
-    PIP_RETRIES=10
+    PIP_RETRIES=10 \
+    PIP_NO_CACHE_DIR=1
 
 WORKDIR /app
 
@@ -15,13 +15,10 @@ RUN apt-get update \
 
 # CPU-only torch first (a few hundred MB instead of several GB of CUDA libraries).
 # --extra-index-url means pip falls back to the normal PyPI torch if no CPU wheel exists.
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install torch==2.14.0 --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install torch==2.14.0 --extra-index-url https://download.pytorch.org/whl/cpu
 
-# Everything else. The pip cache mount keeps downloaded wheels between build attempts.
 COPY requirements.txt .
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+RUN pip install -r requirements.txt
 
 COPY . .
 
@@ -31,13 +28,11 @@ RUN useradd --create-home appuser \
     && chown -R appuser:appuser /app
 USER appuser
 
+# Railway sets PORT at run time; 8501 is the default for local Docker.
+ENV PORT=8501
 EXPOSE 8501
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD curl --fail http://localhost:8501/_stcore/health || exit 1
+    CMD curl --fail http://localhost:${PORT}/_stcore/health || exit 1
 
-CMD ["streamlit", "run", "app.py", \
-     "--server.port=8501", \
-     "--server.address=0.0.0.0", \
-     "--server.headless=true", \
-     "--browser.gatherUsageStats=false"]  
+CMD streamlit run app.py --server.port=${PORT} --server.address=0.0.0.0 --server.headless=true --browser.gatherUsageStats=false
