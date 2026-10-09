@@ -1,5 +1,4 @@
 .env
-.env.*
 users.json
 observability.db
 observability.db-wal
